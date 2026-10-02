@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pendulum Wave Synchronization Sim</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-white min-h-screen">
+<div class="max-w-4xl mx-auto p-4">
+  <h1 class="text-3xl font-bold text-center text-cyan-400 mb-1">🕰️ Pendulum Wave Synchronization Sim</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">Watch 15 pendulums create mesmerizing synchronized patterns</p>
+
+  <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+    <!-- Controls -->
+    <div class="space-y-4">
+      <div class="bg-gray-800 rounded-2xl p-4 space-y-4">
+        <h2 class="font-bold text-gray-300">Controls</h2>
+        <div>
+          <label for="speed" class="block text-xs text-gray-400 mb-1">Speed: <span id="speed-val">1.0</span>x</label>
+          <input type="range" id="speed" min="0.1" max="5" step="0.1" value="1" class="w-full accent-cyan-500" aria-label="Simulation speed">
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="trail-toggle" class="w-4 h-4 accent-cyan-500" checked>
+          <label for="trail-toggle" class="text-sm text-gray-300">Show Trails</label>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="string-toggle" class="w-4 h-4 accent-cyan-500" checked>
+          <label for="string-toggle" class="text-sm text-gray-300">Show Strings</label>
+        </div>
+        <div>
+          <label for="num-pend" class="block text-xs text-gray-400 mb-1">Pendulums: <span id="num-pend-val">15</span></label>
+          <input type="range" id="num-pend" min="5" max="20" value="15" class="w-full accent-cyan-500" aria-label="Number of pendulums">
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-2xl p-4">
+        <h2 class="font-bold text-gray-300 mb-3">Playback</h2>
+        <div class="flex flex-col gap-2">
+          <button onclick="togglePlay()" id="play-btn" class="w-full py-2 bg-cyan-600 text-white rounded-lg font-semibold hover:bg-cyan-500 transition text-sm" aria-label="Play or pause">⏸ Pause</button>
+          <button onclick="resetSim()" class="w-full py-2 bg-gray-600 text-white rounded-lg font-semibold hover:bg-gray-500 transition text-sm" aria-label="Reset simulation">↺ Reset</button>
+        </div>
+        <div class="mt-3 text-xs text-gray-500">
+          <div>Cycle: <span id="cycle-time" class="text-cyan-400">—</span></div>
+          <div>Elapsed: <span id="elapsed-time" class="text-gray-300">0.0s</span></div>
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-2xl p-4">
+        <h2 class="font-bold text-gray-300 mb-2 text-sm">About</h2>
+        <p class="text-xs text-gray-400 leading-relaxed">Each pendulum has a different length. The shortest completes the most oscillations. After one full cycle (~60s), all pendulums realign. The beautiful patterns emerge from their interference.</p>
+      </div>
+    </div>
+
+    <!-- Canvas -->
+    <div class="lg:col-span-3">
+      <canvas id="canvas" width="700" height="520" class="rounded-2xl bg-gray-950 w-full border border-gray-800" aria-label="Pendulum wave animation"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+let playing = true;
+let time = 0;
+let lastTs = null;
+let trails = [];
+
+const CYCLE = 60; // seconds for longest pendulum to complete N oscillations
+const MIN_OSCIL = 40; // shortest pendulum oscillations per cycle
+const PIVOT_Y_FRAC = 0.08;
+
+function getPendulums(n) {
+  const pendulums = [];
+  for (let i = 0; i < n; i++) {
+    const oscillations = MIN_OSCIL + i; // pendulum i completes (40+i) oscillations in CYCLE seconds
+    const freq = oscillations / CYCLE; // Hz
+    const color = `hsl(${(i / n) * 280 + 180},90%,65%)`;
+    pendulums.push({ freq, color, trail: [] });
+  }
+  return pendulums;
+}
+
+let n = 15;
+let pendulums = getPendulums(n);
+
+function getGeometry() {
+  const W = canvas.width;
+  const H = canvas.height;
+  const pivotY = H * PIVOT_Y_FRAC;
+  const spacing = W / (n + 1);
+  return { W, H, pivotY, spacing };
+}
+
+function getPosition(p, i, t) {
+  const { W, H, pivotY, spacing } = getGeometry();
+  const pivotX = spacing * (i + 1);
+  const maxLen = H * 0.85;
+  const minLen = H * 0.55;
+  // Length inversely proportional to frequency squared (T = 2pi*sqrt(L/g), T=1/f)
+  // L ∝ 1/f^2
+  const fRel = p.freq / (pendulums[n-1].freq);
+  const len = minLen + (maxLen - minLen) * (1 - fRel * 0.7);
+  const angle = Math.sin(2 * Math.PI * p.freq * t) * 0.4;
+  const bobX = pivotX + Math.sin(angle) * len;
+  const bobY = pivotY + Math.cos(angle) * len;
+  return { pivotX, pivotY, bobX, bobY, len };
+}
+
+function draw(t) {
+  const { W, H } = getGeometry();
+  ctx.clearRect(0, 0, W, H);
+
+  // Background
+  ctx.fillStyle = '#030712';
+  ctx.fillRect(0, 0, W, H);
+
+  // Ceiling bar
+  ctx.fillStyle = '#1f2937';
+  ctx.fillRect(0, H * PIVOT_Y_FRAC - 6, W, 8);
+
+  const showTrails = document.getElementById('trail-toggle').checked;
+  const showStrings = document.getElementById('string-toggle').checked;
+
+  pendulums.forEach((p, i) => {
+    const { pivotX, pivotY, bobX, bobY } = getPosition(p, i, t);
+
+    // Update trail
+    if (showTrails) {
+      p.trail.push({ x: bobX, y: bobY });
+      if (p.trail.length > 40) p.trail.shift();
+
+      if (p.trail.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(p.trail[0].x, p.trail[0].y);
+        for (let j = 1; j < p.trail.length; j++) {
+          ctx.lineTo(p.trail[j].x, p.trail[j].y);
+        }
+        ctx.strokeStyle = p.color + '44';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    } else {
+      p.trail = [];
+    }
+
+    // String
+    if (showStrings) {
+      ctx.beginPath();
+      ctx.moveTo(pivotX, pivotY);
+      ctx.lineTo(bobX, bobY);
+      ctx.strokeStyle = '#374151';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // Pivot dot
+    ctx.beginPath();
+    ctx.arc(pivotX, pivotY, 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#6b7280';
+    ctx.fill();
+
+    // Bob
+    const r = 6 + (n - i) * 0.3;
+    ctx.beginPath();
+    ctx.arc(bobX, bobY, r, 0, Math.PI * 2);
+    const grad = ctx.createRadialGradient(bobX-r*0.3, bobY-r*0.3, r*0.1, bobX, bobY, r);
+    grad.addColorStop(0, '#ffffff88');
+    grad.addColorStop(1, p.color);
+    ctx.fillStyle = grad;
+    ctx.fill();
+  });
+
+  // Elapsed display
+  ctx.fillStyle = '#4b5563';
+  ctx.font = '12px monospace';
+  ctx.fillText(`t = ${t.toFixed(1)}s`, 10, H - 10);
+}
+
+function loop(ts) {
+  if (playing) {
+    if (lastTs !== null) {
+      const speed = parseFloat(document.getElementById('speed').value);
+      time += (ts - lastTs) / 1000 * speed;
+    }
+    lastTs = ts;
+    draw(time);
+    const elapsed = time % CYCLE;
+    document.getElementById('elapsed-time').textContent = time.toFixed(1) + 's';
+  } else {
+    lastTs = null;
+  }
+  requestAnimationFrame(loop);
+}
+
+function togglePlay() {
+  playing = !playing;
+  const btn = document.getElementById('play-btn');
+  btn.textContent = playing ? '⏸ Pause' : '▶ Play';
+  if (playing) lastTs = null;
+}
+
+function resetSim() {
+  time = 0;
+  lastTs = null;
+  pendulums.forEach(p => p.trail = []);
+  draw(0);
+}
+
+// Sliders
+document.getElementById('speed').addEventListener('input', function() {
+  document.getElementById('speed-val').textContent = parseFloat(this.value).toFixed(1);
+});
+
+document.getElementById('num-pend').addEventListener('input', function() {
+  n = parseInt(this.value);
+  document.getElementById('num-pend-val').textContent = n;
+  pendulums = getPendulums(n);
+  resetSim();
+});
+
+// Compute cycle time
+const cycleInfo = CYCLE + 's';
+document.getElementById('cycle-time').textContent = cycleInfo;
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
